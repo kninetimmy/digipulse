@@ -363,6 +363,14 @@ def cache_response(ref_id: str, host: str, label: str, body: str,
     lands in a single directory. Writes via a temp file + atomic rename so a
     hard kill mid-write can never leave a truncated .gz that looks like a
     complete entry.
+
+    The pid-only temp-file suffix is only collision-free because this
+    function is a plain, non-async def: nothing here ever awaits, so two
+    calls from different coroutines in the same event loop can never
+    interleave inside it, and one process only ever has one pid. If this is
+    ever moved onto a thread (e.g. via asyncio.to_thread()), the pid suffix
+    stops being unique on its own and needs thread/task identity folded in
+    too.
     """
     out_dir = Path(cache_dir) / cache_key(ref_id, host)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -372,6 +380,30 @@ def cache_response(ref_id: str, host: str, label: str, body: str,
     tmp.write_bytes(data)
     os.replace(tmp, target)
     return target
+
+
+def preflight_cache_dir(cache_dir: str) -> None:
+    """Create cache_dir and prove it is actually writable, once, before a
+    single sysop is contacted.
+
+    cache_response() raises straight out of Prober.probe() on any I/O
+    error, and run() does `results.append(await coro)` with no guard around
+    it -- so if a cache write failed partway through a sweep, the exception
+    would abort the whole thing before store() or report() ever run,
+    discarding every result already collected for hosts already contacted.
+    Exercising the exact same mkdir + temp-file + atomic-rename sequence
+    here, before the AsyncClient used for probing is even opened, turns an
+    unwritable or otherwise unusable cache_dir (no permission, a plain file
+    sitting where a directory needs to go, a full disk, ...) into a
+    fail-closed error at startup instead of a mid-sweep data loss.
+    """
+    out_dir = Path(cache_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    probe = out_dir / f".preflight{os.getpid()}"
+    tmp = probe.with_name(probe.name + ".tmp")
+    tmp.write_bytes(b"")
+    os.replace(tmp, probe)
+    probe.unlink()
 
 
 def read_cached_response(path) -> str:
@@ -614,6 +646,11 @@ def report(db_path: str = DB_PATH) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
+    # Fail closed, before contacting anyone: an unwritable or unusable
+    # cache_dir must abort here, not partway through a sweep after some
+    # sysops have already been contacted (see preflight_cache_dir()).
+    preflight_cache_dir(args.cache_dir)
+
     ua = (f"ysfprobe/{VERSION} (+amateur radio reflector directory research; "
           f"operator {args.callsign}; one request per host)")
 
