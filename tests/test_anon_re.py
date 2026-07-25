@@ -21,7 +21,7 @@ from ysfprobe import ANON_RE
 # and has nothing to do with redacting a callsign. Each of these used to
 # trip the old ANON_RE.
 ORDINARY_MARKUP = [
-    '<input type="hidden" name="do" value="SetFilter" />',
+    '<input type="hidden" name="csrf_token" value="deadbeef" />',
     'class="hidden"',
     'class="d-none hidden"',
     (
@@ -72,9 +72,9 @@ def test_exponentiation_with_a_callsign_shaped_variable_name_does_not_match(body
 # Genuine redaction renderings. The first two shapes were confirmed
 # against the real 43-host sample; the entity-zero shape ("&Oslash;" is
 # the ham convention for a slashed zero, undecoded because probe() reads
-# raw r.text) is real too -- it's the majority rendering on one of the two
-# hosts that actually redact -- but the fixture below uses an invented
-# prefix rather than any of the observed callsigns.
+# raw r.text) is real too -- it accounts for half the redacted cells on
+# one of the two hosts that actually redact -- but the fixture below uses
+# an invented prefix rather than any of the observed callsigns.
 GENUINE_REDACTIONS = [
     "<td nowrap>AB1***</td>",           # partially starred callsign
     "<td nowrap>KX9***</td>",           # partially starred callsign, table context
