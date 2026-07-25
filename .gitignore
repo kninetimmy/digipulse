@@ -11,5 +11,9 @@ venv/
 # Probe output — local scan data, regenerated on every run
 ysfprobe.db
 
-# Registry data fetched at runtime; belongs to DVRef, not this repo
-YSFHosts.txt
+# Registry data fetched at runtime. Belongs to RefCheck.Radio, not this repo —
+# their terms prohibit redistribution with altered attribution.
+YSFHosts.*
+
+# Agent guidance — kept local, deliberately not published
+CLAUDE.md
