@@ -191,6 +191,49 @@ class Signature:
     version_re: Optional[re.Pattern] = None
 
 
+# --- ycs vs. plain xlxd: what the first live sample got wrong ------------
+#
+# The first live sample fingerprinted 23 hosts as "ycs", every XLXnnn/XLXQRZ/
+# XLXPOL-titled dashboard among them included, via two patterns ORed
+# together: a literal `YCS` token, and `xreflector`. Two XLX-titled hosts
+# (XLX070, XLX314) came back unidentified despite sharing that exact title
+# shape with the rest -- an inconsistency, since a title shape is a property
+# of the software that rendered it, not of the individual sysop.
+#
+# Reading the cached bodies (ysfprobe_cache/) resolved it: `xreflector` was
+# never a YCS marker. It was matching a `<meta name="keywords">` tag that
+# ships in the *xlxd* dashboard's own template -- xlxd's multi-protocol
+# reflector branding has long used "XReflector" as a synonym for the
+# project name itself, unrelated to the separate YCS server software. Every
+# XLX-titled host that matched "ycs" did so through that meta tag alone,
+# and the two that came back unidentified (XLX070, XLX314) simply had a
+# sysop-customised `keywords` tag that no longer contained the word --
+# confirmed by diffing that one tag's content across several XLX-titled
+# hosts: identical stock wording on the hosts that matched, a wholly
+# different custom string on the two that didn't. Nothing about the actual
+# dashboard differed. The same accident also over-matched two "Fusion
+# Dashboard"-titled hosts as ycs while two more, template-for-template
+# identical (same script/stylesheet bundle, verified structurally), came
+# back unidentified for the same reason.
+#
+# Genuine YCS dashboards, by contrast, carry their own software name as a
+# literal token completely independent of that meta tag: in a page title
+# ("YCS Dashboard"), in on-page links/buttons to the install's own numbered
+# instance (e.g. a "YCSnnn" button), or in the hostname of a sibling page the
+# dashboard itself links to (a "ycsNNN.<domain>" address). That token is
+# case-inconsistent across real installs -- upper in on-page button text,
+# lower in URLs -- so the pattern below adds re.I; the original was
+# case-sensitive and silently missed the lower-case form. `xreflector` is
+# dropped outright: it never identified YCS, only xlxd's unrelated branding.
+#
+# xlxd's own dashboards are identified instead by their title, which is the
+# one thing consistently observed across every XLX-titled host regardless
+# of which visual template a sysop has installed (the sample alone showed
+# at least three distinct script/stylesheet bundles under this one title
+# convention) -- either the bare designator ("XLXnnn") or the designator
+# followed by "Reflector Dashboard". No non-XLX-titled host in the sample
+# begins its title that way, so the pattern is anchored to the <title> tag
+# rather than searched for as a bare substring.
 SIGNATURES: list[Signature] = [
     Signature(
         "ysfdash2-shaymez",
@@ -206,10 +249,36 @@ SIGNATURES: list[Signature] = [
         [re.compile(r"pYSFReflector", re.I),
          re.compile(r"\bpYSF3?\b")],
     ),
+    # These four are each identified by one literal, software-specific title
+    # string with no observed overlap against any other family in the
+    # sample -- but "ycs" used to over-match on an unrelated meta tag (see
+    # the block comment above) and swallowed one of them (Fusion Dashboard)
+    # before this fix. Kept above "ycs"/"xlxd" on purpose: if either of
+    # those two ever grows a broader pattern again, these narrower,
+    # single-purpose ones must still get first look.
+    Signature(
+        "hub-monitor",
+        [re.compile(r"HUB Monitor", re.I)],
+    ),
+    Signature(
+        "fusion-dashboard",
+        [re.compile(r"Fusion Dashboard", re.I)],
+    ),
+    Signature(
+        "cumbriacq-backup",
+        [re.compile(r"CumbriaCQ Backup Server", re.I)],
+    ),
+    Signature(
+        "marras",
+        [re.compile(r"MARRAS C4FM Multi Streams Reflector", re.I)],
+    ),
     Signature(
         "ycs",
-        [re.compile(r"\bYCS\d*\b"),
-         re.compile(r"xreflector", re.I)],
+        [re.compile(r"\bYCS\d*\b", re.I)],
+    ),
+    Signature(
+        "xlxd",
+        [re.compile(r"<title[^>]*>\s*XLX[0-9A-Z]", re.I)],
     ),
     Signature(
         "ysfdash-dg9vh",
