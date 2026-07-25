@@ -11,6 +11,10 @@ venv/
 # Probe output — local scan data, regenerated on every run
 ysfprobe.db
 
+# Raw response cache — third-party dashboard HTML, local scan data belonging
+# to the operator, must not be redistributed
+ysfprobe_cache/
+
 # Registry data fetched at runtime. Belongs to RefCheck.Radio, not this repo —
 # their terms prohibit redistribution with altered attribution.
 YSFHosts.*
