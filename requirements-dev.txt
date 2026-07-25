@@ -1,4 +1,5 @@
-# Dev-only dependencies for running the test suite. ysfprobe.py's only
-# runtime dependency is httpx (see its module docstring); pytest is never
-# imported by ysfprobe.py itself.
+# Dev-only dependencies for running the test suite. The runtime dependency
+# (httpx) is pinned in requirements.txt, not here; pytest is never imported
+# by ysfprobe.py itself. Install both files together to run the suite:
+#   pip install -r requirements.txt -r requirements-dev.txt
 pytest>=7
