@@ -7,6 +7,8 @@ HTML. Everything writes under pytest's tmp_path, never the real
 CACHE_DIR -- no network access anywhere in this file.
 """
 
+import os
+
 from ysfprobe import cache_key, cache_response, read_cached_response
 
 SYNTHETIC_BODY = (
@@ -92,7 +94,11 @@ def test_untrusted_ref_id_and_host_cannot_escape_the_cache_directory(tmp_path):
     ]:
         path = cache_response(ref_id, host, "root", SYNTHETIC_BODY, cache_dir=str(cache_dir))
         resolved = path.resolve()
-        assert resolved.is_relative_to(cache_dir.resolve())
+        base = cache_dir.resolve()
+        # os.path.commonpath (not startswith) so a sibling like "cacheEVIL"
+        # can never be mistaken for containment inside "cache". Portable
+        # back to Python 3.8 -- Path.is_relative_to() is 3.9+.
+        assert os.path.commonpath([str(resolved), str(base)]) == str(base)
         assert read_cached_response(path) == SYNTHETIC_BODY
 
 
