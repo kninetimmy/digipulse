@@ -232,8 +232,43 @@ JSON_CANDIDATES = [
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 # Loose callsign shape: 1-2 alnum, digit, 1-4 letters. Deliberately permissive.
 CALLSIGN_RE = re.compile(r"\b[A-Z]{1,2}[0-9][A-Z]{1,4}\b")
-# Common anonymisation renderings seen in GDPR-conscious dashboards.
-ANON_RE = re.compile(r"(\*{2,}|X{3,}\d|\bANON\b|\bhidden\b)", re.I)
+
+# A callsign-shaped prefix immediately before a run of asterisks, e.g. the
+# "W7C" in "W7C***". Same shape as CALLSIGN_RE's prefix (1-2 letters, a
+# digit, then a few more letters/digits) but does NOT require the trailing
+# run of letters CALLSIGN_RE does -- the asterisks are what stand in for
+# those, so the token as a whole never looks like a complete callsign.
+_ANON_PREFIX = r"\b[A-Z]{1,2}[0-9][A-Z0-9]{0,4}"
+
+# What ANON_RE is defined to mean: this dashboard is displaying a
+# redacted stand-in for a callsign -- NOT "this page's markup happens to
+# contain the substring hidden or **". The first live sample (43 reachable
+# dashboards) showed the old pattern was measuring the latter: \bhidden\b
+# matched ordinary Bootstrap markup (an <input type="hidden">, a
+# class="d-none hidden") present on nearly every dashboard, and \*{2,}
+# matched the /** that opens a CSS or JSDoc comment block. Neither has
+# anything to do with a redacted callsign, and the flagged cohort actually
+# had MORE visible callsigns than the unflagged one -- the flag was
+# measuring the opposite of what it claimed to.
+#
+# Checked against the 43 real dashboard bodies in ysfprobe_cache/, genuine
+# redaction takes one of these shapes:
+#   - a callsign-shaped prefix immediately followed by 2+ asterisks, e.g.
+#     "W7C***" -- by far the most common real rendering: the dashboard
+#     shows the first few characters and masks the rest;
+#   - a run of 4+ asterisks standing alone, with nothing callsign-shaped
+#     in front of it, that isn't itself the delimiter of a "/**"-style
+#     comment -- the whole callsign masked rather than just a suffix;
+#   - a run of 3+ literal X's followed by a digit, e.g. "XXXXX1" -- the
+#     same idea rendered with X instead of an asterisk;
+#   - the literal placeholder word ANON.
+# Neither of the first two branches matches on a bare "**": that's exactly
+# what opens a "/**" comment, and requiring either a callsign-shaped
+# prefix or a 4+ run keeps it out without special-casing comment syntax.
+ANON_RE = re.compile(
+    rf"({_ANON_PREFIX}\*{{2,}}|(?<!/)\*{{4,}}|X{{3,}}\d|\bANON\b)",
+    re.I,
+)
 
 
 @dataclass
