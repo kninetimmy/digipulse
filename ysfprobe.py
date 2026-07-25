@@ -232,8 +232,66 @@ JSON_CANDIDATES = [
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 # Loose callsign shape: 1-2 alnum, digit, 1-4 letters. Deliberately permissive.
 CALLSIGN_RE = re.compile(r"\b[A-Z]{1,2}[0-9][A-Z]{1,4}\b")
-# Common anonymisation renderings seen in GDPR-conscious dashboards.
-ANON_RE = re.compile(r"(\*{2,}|X{3,}\d|\bANON\b|\bhidden\b)", re.I)
+
+# A callsign-shaped prefix immediately before a run of asterisks, e.g. the
+# "AB1" in "AB1***". Same shape as CALLSIGN_RE's prefix (1-2 letters, a
+# digit, then a few more letters/digits) but does NOT require the trailing
+# run of letters CALLSIGN_RE does -- the asterisks are what stand in for
+# those, so the token as a whole never looks like a complete callsign.
+_ANON_PREFIX = r"\b[A-Z]{1,2}[0-9][A-Z0-9]{0,4}"
+
+# What ANON_RE is defined to mean: this dashboard is displaying a
+# redacted stand-in for a callsign -- NOT "this page's markup happens to
+# contain the substring hidden or **". The first live sample (43 reachable
+# dashboards, 28 flagged by the old pattern) showed the old pattern was
+# measuring the latter: 26 of those 28 were \bhidden\b matching ordinary
+# Bootstrap markup (an <input type="hidden">, a class="d-none hidden")
+# present on nearly every dashboard; the other 2 were genuine redaction.
+# \*{2,} matching the /** that opens a CSS or JSDoc comment block is a
+# real forward-looking risk over the full ~1,700-host registry -- it just
+# didn't happen to occur in this particular 43-host sample (zero "/**" or
+# "**/" in any of the 43 bodies). Either way, none of it has anything to
+# do with a redacted callsign, and the flagged cohort actually had MORE
+# visible callsigns than the unflagged one -- the flag was measuring the
+# opposite of what it claimed to.
+#
+# Checked cell-by-cell against the 43 real dashboard bodies in
+# ysfprobe_cache/ (only 2 of the 43 hosts show any genuine redaction, but
+# between them there are 126 individually redacted "lastheard" cells),
+# genuine redaction takes one of these shapes:
+#   - a callsign-shaped prefix immediately followed by 2+ asterisks, e.g.
+#     "AB1***" -- the dashboard shows the first few characters and masks
+#     the rest;
+#   - a bare run of 3+ asterisks with nothing callsign-shaped in front of
+#     it, that isn't itself the delimiter of a CSS/JS comment -- either
+#     the whole callsign masked rather than just a suffix, or (half the
+#     redacted cells on one of the two redacting hosts) a callsign whose
+#     leading zero is rendered as the HTML entity &Oslash; (the ham
+#     zero-slash convention) rather than a literal digit: probe() reads
+#     r.text, so that entity never decodes, and a prefix regex anchored on
+#     [0-9] can never see the digit. This branch does not require a
+#     callsign-shaped prefix at all, specifically so it still catches
+#     that case -- e.g. "N&Oslash;U***" is caught here, not above, because
+#     there is no ASCII digit for the prefix branch to anchor on. (An
+#     earlier version of this pattern required 4+ bare asterisks, which
+#     missed 18 of these 126 cells -- 11 of them on the host where
+#     zero-slash calls make up 10 of 20 redacted cells.)
+#   - a run of 3+ literal X's followed by a digit, e.g. "XXXXX1" -- the
+#     same idea rendered with X instead of an asterisk;
+#   - the literal placeholder word ANON.
+# The bare-run branch excludes matches immediately preceded OR followed by
+# '/' or '*': that's what keeps out both the "/**" that opens a CSS/JSDoc
+# comment and the "**/" (or a decorative "/*** ... ***/" banner) that
+# closes one, without having to special-case comment syntax. The
+# prefix+asterisks branch additionally excludes a match immediately
+# followed by a digit -- otherwise "**" is also the JS/Python
+# exponentiation operator, and a variable name shaped like a callsign
+# (e.g. "x2**3") would false-positive; zero occurrences of that in the
+# 43-host sample, but it's a live risk over the full ~1,700-host registry.
+ANON_RE = re.compile(
+    rf"({_ANON_PREFIX}\*{{2,}}(?!\d)|(?<![/*])\*{{3,}}(?![/*])|X{{3,}}\d|\bANON\b)",
+    re.I,
+)
 
 
 @dataclass
