@@ -37,6 +37,16 @@ python ysfprobe.py --callsign <YOURCALL> --hosts-file YSFHosts.txt --limit 50
 python ysfprobe.py --report
 ```
 
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The test suite runs entirely against synthetic fixtures — it never touches
+the network and never reads a real RefCheck.Radio export.
+
 ## Conduct
 
 This project reads public dashboards and asks nothing of reflector sysops.

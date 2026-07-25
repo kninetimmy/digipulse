@@ -1,0 +1,4 @@
+# Dev-only dependencies for running the test suite. ysfprobe.py's only
+# runtime dependency is httpx (see its module docstring); pytest is never
+# imported by ysfprobe.py itself.
+pytest>=7
