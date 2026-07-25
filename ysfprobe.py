@@ -415,9 +415,14 @@ class Prober:
                 continue
             # Cache whatever came back regardless of status -- a 404 on a
             # hypothesised endpoint is itself useful offline evidence that
-            # the path doesn't exist for this dashboard family.
+            # the path doesn't exist for this dashboard family. The status
+            # is folded into the label (not just the body) so that fact
+            # survives a glob of the cache directory: two cached bodies that
+            # are both e.g. {"error":"not found"} must stay distinguishable
+            # from a genuine 200 without decompressing anything.
             body = r.text[:200_000]
-            cache_response(res.ref_id, res.host, f"json-{path}", body, self.cache_dir)
+            cache_response(res.ref_id, res.host, f"json-{path}-{r.status_code}",
+                            body, self.cache_dir)
             if r.status_code != 200:
                 continue
             ctype = r.headers.get("content-type", "")
