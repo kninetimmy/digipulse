@@ -1,5 +1,5 @@
 """Tests for cache_response() / read_cached_response() -- the write/read
-round-trip that lets SIGNATURES, ANON_RE and JSON_CANDIDATES be tuned
+round-trip that lets SIGNATURES, ANON_RE and FAMILY_CANDIDATES be tuned
 offline against previously-fetched bodies instead of re-contacting sysops.
 
 Every body below is invented for the test; none of it is real dashboard
