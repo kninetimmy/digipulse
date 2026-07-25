@@ -17,3 +17,7 @@ YSFHosts.*
 
 # Agent guidance — kept local, deliberately not published
 CLAUDE.md
+.orchestrator/worktrees/
+.orchestrator/config.local.toml
+.orchestrator/state.json
+.orchestrator/delivery.lock
