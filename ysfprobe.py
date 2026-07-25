@@ -201,30 +201,38 @@ class Signature:
 # of the software that rendered it, not of the individual sysop.
 #
 # Reading the cached bodies (ysfprobe_cache/) resolved it: `xreflector` was
-# never a YCS marker. It was matching a `<meta name="keywords">` tag that
-# ships in the *xlxd* dashboard's own template -- xlxd's multi-protocol
-# reflector branding has long used "XReflector" as a synonym for the
-# project name itself, unrelated to the separate YCS server software. Every
-# XLX-titled host that matched "ycs" did so through that meta tag alone,
-# and the two that came back unidentified (XLX070, XLX314) simply had a
-# sysop-customised `keywords` tag that no longer contained the word --
-# confirmed by diffing that one tag's content across several XLX-titled
-# hosts: identical stock wording on the hosts that matched, a wholly
-# different custom string on the two that didn't. Nothing about the actual
-# dashboard differed. The same accident also over-matched two "Fusion
-# Dashboard"-titled hosts as ycs while two more, template-for-template
-# identical (same script/stylesheet bundle, verified structurally), came
-# back unidentified for the same reason.
+# never a YCS marker. Every XLX-titled host that matched "ycs" did so
+# because it ships this exact stock tag, verbatim, in its <head> --
+#
+#   <meta name="keywords"    content="Ham Radio, D-Star, XReflector, XLX, XRF, DCS, REF, YSF" />
+#
+# (XLXQRZ's copy is the same tag with an empty trailing field: ...DCS, REF, "
+# instead of "...REF, YSF" -- same template, different sysop's edit.) This is
+# xlxd's OWN branding -- the "XReflector" in there is xlxd's multi-protocol
+# reflector project name, unrelated to the separate YCS server software.
+# The two hosts that came back unidentified (XLX070, XLX314) simply have a
+# sysop-edited keywords tag with the word removed, e.g. XLX314's reads
+# `content="Ham Radio, D-Star, DMR, YSF "` and XLX070's reads
+# `content="Ham Radio, 070, REFLETOR018"` -- nothing else about either
+# dashboard differs from its "ycs"-tagged siblings. The same accident also
+# over-matched two "Fusion Dashboard"-titled hosts as ycs while two more,
+# template-for-template identical (same script/stylesheet bundle, verified
+# structurally), came back unidentified for the same reason.
 #
 # Genuine YCS dashboards, by contrast, carry their own software name as a
-# literal token completely independent of that meta tag: in a page title
-# ("YCS Dashboard"), in on-page links/buttons to the install's own numbered
-# instance (e.g. a "YCSnnn" button), or in the hostname of a sibling page the
-# dashboard itself links to (a "ycsNNN.<domain>" address). That token is
-# case-inconsistent across real installs -- upper in on-page button text,
-# lower in URLs -- so the pattern below adds re.I; the original was
-# case-sensitive and silently missed the lower-case form. `xreflector` is
-# dropped outright: it never identified YCS, only xlxd's unrelated branding.
+# literal token with nothing to do with that meta tag -- e.g. one links to
+# its own wiki with `href="http://ycs-wiki.xreflector.net"` and closes with
+# a footer crediting the software as "YCS" by name; another (a different,
+# unrelated install) links to a sibling page on the same instance with
+# `href="http://ycs235.xreflector.net/ycs"`. Both installs also happen to
+# use the domain xreflector.net for the software's own home -- coincidental
+# overlap with xlxd's unrelated use of the same word as a keyword, and part
+# of why the old pattern was so easy to write by accident. The token is
+# case-inconsistent across real installs -- upper-case in on-page button
+# text ("YCS235"), lower-case in the URLs above -- so the pattern below adds
+# re.I; the original was case-sensitive and silently missed the lower-case
+# form.  `xreflector` is dropped outright: it never identified YCS, only
+# xlxd's unrelated branding.
 #
 # xlxd's own dashboards are identified instead by their title, which is the
 # one thing consistently observed across every XLX-titled host regardless
