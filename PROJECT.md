@@ -66,13 +66,47 @@ are at stable paths:
 P25, NXDN and M17 host files follow the same pattern, which matters for the
 deferred second-adapter work.
 
-**The format changed, and it breaks the spike.** The text export is
-**tab-delimited**, not semicolon-delimited. `parse_hosts()` splits on `;`, so
-every line will land in `unparsed` — loud, not silent, which is the parser
-design working as intended. There is now also a **JSON export**, which is the
-better parse target and removes a whole class of delimiter guesswork. The exact
-column layout is still unconfirmed by inspection: download once, eyeball it,
-then fix the parser.
+**Format verified against a real download, 2026-07-25.** The text export is
+semicolon-delimited. RefCheck's landing page calls it "tab-delimited" — that
+description is wrong; there is not a single tab in the file. 1,416 records,
+uniformly 7 fields:
+
+```
+00006;GR-HELLAS Zone A;(YCS202);46.59.68.211;42000;000;
+  ID ; Name          ; Descr  ; Address    ; Port; Users
+```
+
+`parse_hosts()` reads fields 0–4 and ignores the rest, so **it parses this
+correctly as written.** Field 6 is a user count rather than the historic
+`Comment`, but nothing reads it. No parser change is needed.
+
+**The text export is still the wrong source, for a different reason.** Its
+Address column is a bare IPv4 for **1,415 of 1,416** records. `candidate_urls()`
+sees a bare IP and emits `http://<ip>/` only — no HTTPS attempt, and no Host
+header the reflector's vhost would recognise. That probes default vhosts rather
+than dashboards: ~1,400 requests spent on sysops to learn almost nothing.
+
+**Use the JSON export.** It carries what the flat file discards:
+
+| Field | Coverage |
+|---|---|
+| `url` — declared dashboard URL, scheme included (781 http / 406 https) | 83.8 % |
+| `ipv4` | 99.9 % |
+| `sponsor` | 82.5 % |
+| `dns` — real hostname | 57.6 % |
+| `ipv6` | 7.0 % |
+| `country` | 100 % |
+
+Plus `port`, `user_count`, `network_type`, `dns_cache_updated_at` and
+`last_verified_at` per record, under a `reflectors` array alongside a
+`_refcheck_metadata` block.
+
+**This reshapes Phase 0.** The registry already declares a dashboard URL for
+83.8 % of reflectors. The probe's question is no longer "guess where the
+dashboard is" but "verify what the registry already says, and fingerprint what
+answers." That is a better experiment and a considerably politer one — it also
+means the ≥50 % gate in §4 should be read against reachable declared URLs, not
+against blind scheme-guessing.
 
 **Publisher terms — binding constraints, not suggestions:**
 
@@ -101,11 +135,17 @@ dashboard we can parse, and what software is it running?*
 - Hostname → both schemes, bare IP → http only
 - Report generation and the GO/PARTIAL/NO-GO verdict gate
 
-**Known wrong (corrected 2026-07-25, fix not yet written):**
+**Known wrong (found 2026-07-25, fix not yet written):**
 - The `--hosts-url` default points at `dvref.com`, which is not the registry.
-  It is `https://hostfiles.refcheck.radio/YSFHosts.txt`.
-- `parse_hosts()` splits on `;`. The export is **tab-delimited**. As written the
-  parser rejects every line.
+  It is `https://hostfiles.refcheck.radio/YSFHosts.{txt,json}`.
+- There is no JSON host-file reader, so the spike cannot use the declared `url`
+  the registry supplies for 83.8 % of reflectors. `candidate_urls()` guesses
+  schemes off a bare IP instead, which is both worse data and ruder. See §3.
+
+**Confirmed correct after all:** `parse_hosts()`'s semicolon split matches the
+real file exactly. An earlier note in this doc claimed the export was
+tab-delimited and the parser therefore broken; that came from RefCheck's page
+description, not from the file, and is wrong.
 
 **Still unverified:**
 - `JSON_CANDIDATES` paths are **hypotheses**, not observed endpoints
@@ -261,9 +301,10 @@ moment the project requires cooperation to function, it stops functioning.
    and a JSON export exists.
 2. ~~Pick a name and a license; initial commit~~ — **done**: `digipulse`,
    Apache-2.0, <https://github.com/kninetimmy/digipulse>.
-3. **Fix `parse_hosts()` for the real format.** Prefer the JSON export and keep a
-   text parser as fallback. Download the host file once, confirm the columns
-   against a real file, and only then trust the output.
+3. **Add a JSON host-file reader and probe the registry's declared `url`.**
+   `parse_hosts()` needs no change; keep it for the text fallback. The win is
+   retiring `candidate_urls()` guesswork wherever a `url` exists (83.8 %), and
+   falling back to `dns` before `ipv4`.
 4. `--limit 50` sample run; inspect unidentified titles; add signatures
 5. Full sweep, call the gate
 6. Design the normalised record schema (blocks all of Phase 1)
