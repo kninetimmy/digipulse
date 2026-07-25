@@ -15,9 +15,13 @@ access log should see a single polite hit and shrug.
 
 Usage:
     pip install httpx
-    python ysfprobe.py --callsign KO4XXX --hosts-url https://... 
-    python ysfprobe.py --callsign KO4XXX --hosts-file YSFHosts.txt --limit 100
+
+    # Download once -- RefCheck.Radio allows one request per hostfile per hour
+    python ysfprobe.py --callsign KO4XXX --hosts-file YSFHosts.json --limit 50
     python ysfprobe.py --report
+
+Prefer the JSON export. It declares a dashboard URL for most reflectors, so we
+verify what the registry already says rather than guessing at an IP address.
 """
 
 from __future__ import annotations
@@ -47,10 +51,20 @@ VERSION = "0.1.0"
 # Host file parsing
 # ---------------------------------------------------------------------------
 
-# YSFHosts.txt is semicolon-delimited, historically:
-#   ID;Name;Description;Address;Port;Comment
-# Field count has drifted between registry generations, so parse defensively
-# and record anything we could not interpret rather than dropping it silently.
+# The registry is RefCheck.Radio. It publishes two exports:
+#
+#   YSFHosts.txt   semicolon-delimited, 7 fields:
+#                    ID;Name;Description;Address;Port;UserCount;
+#                  Field 6 was historically Comment; nothing here reads it.
+#                  Address is a bare IPv4 for all but one record, which makes
+#                  this export nearly useless for finding dashboards.
+#
+#   YSFHosts.json  {"_refcheck_metadata": {...}, "reflectors": [...]}
+#                  Carries a declared dashboard `url` for ~84% of reflectors
+#                  and a real hostname in `dns` for ~58%. Prefer this.
+#
+# Both parsers collect anything they could not interpret rather than dropping
+# it silently -- that list is the early-warning system for a format change.
 
 
 @dataclass
@@ -61,6 +75,21 @@ class Reflector:
     host: str
     port: Optional[int]
     raw: str
+    # Declared dashboard URL, when the registry supplies one. Probing this
+    # beats guessing a scheme, and costs the sysop exactly one request.
+    url: Optional[str] = None
+    # Hostname, when we have one. None means we only ever saw a bare IP, and
+    # a bare IP cannot carry a Host header the reflector's vhost recognises.
+    dns: Optional[str] = None
+
+
+def _hostname_or_none(addr: str) -> Optional[str]:
+    """A bare IP is not a usable hostname. Anything else, we treat as one."""
+    try:
+        ipaddress.ip_address(addr)
+        return None
+    except ValueError:
+        return addr or None
 
 
 def parse_hosts(text: str) -> tuple[list[Reflector], list[str]]:
@@ -86,9 +115,61 @@ def parse_hosts(text: str) -> tuple[list[Reflector], list[str]]:
                 host=parts[3],
                 port=port,
                 raw=line,
+                dns=_hostname_or_none(parts[3]),
             )
         )
     return reflectors, unparsed
+
+
+def parse_hosts_json(text: str) -> tuple[list[Reflector], list[str]]:
+    """RefCheck.Radio's JSON export.
+
+    Preferred over the flat file: it declares a dashboard URL for most
+    reflectors, so the probe verifies what the registry already says instead
+    of guessing schemes against an IP address.
+    """
+    doc = json.loads(text)
+    records = doc.get("reflectors")
+    if records is None:
+        raise ValueError(
+            "registry JSON has no 'reflectors' array -- layout changed, "
+            "re-inspect before trusting anything downstream"
+        )
+
+    reflectors: list[Reflector] = []
+    unparsed: list[str] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            unparsed.append(repr(rec)[:200])
+            continue
+        ref_id = str(rec.get("designator") or "").strip()
+        dns = (rec.get("dns") or "").strip() or None
+        ipv4 = (rec.get("ipv4") or "").strip() or None
+        host = dns or ipv4
+        if not ref_id or not host:
+            unparsed.append(json.dumps(rec)[:200])
+            continue
+        port = rec.get("port")
+        reflectors.append(
+            Reflector(
+                ref_id=ref_id,
+                name=(rec.get("name") or "").strip(),
+                description=(rec.get("description") or "").strip(),
+                host=host,
+                port=port if isinstance(port, int) else None,
+                raw=json.dumps(rec, separators=(",", ":")),
+                url=(rec.get("url") or "").strip() or None,
+                dns=dns,
+            )
+        )
+    return reflectors, unparsed
+
+
+def parse_registry(text: str, source_hint: str = "") -> tuple[list[Reflector], list[str]]:
+    """Dispatch on content, not on filename -- the URL may not end in .json."""
+    if text.lstrip()[:1] == "{" or source_hint.endswith(".json"):
+        return parse_hosts_json(text)
+    return parse_hosts(text)
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +272,19 @@ def looks_like_dashboard(body: str, family: Optional[str], title: Optional[str])
     return any(k in hay for k in ("last heard", "lastheard", "reflector", "gateway", "callsign"))
 
 
-def candidate_urls(host: str) -> list[str]:
-    """A hostname might have TLS; a bare IP almost certainly will not."""
-    try:
-        ipaddress.ip_address(host)
-        return [f"http://{host}/"]
-    except ValueError:
-        return [f"https://{host}/", f"http://{host}/"]
+def candidate_urls(ref: Reflector) -> list[str]:
+    """Declared URL first, then the registry hostname, then nothing.
+
+    A bare IP is deliberately never probed. Without a Host header the
+    reflector's vhost recognises, it answers with a default site -- so the
+    request costs a sysop something and tells us nothing. An empty list means
+    "unmeasurable", which report() counts apart from "failed".
+    """
+    if ref.url:
+        return [ref.url]
+    if ref.dns:
+        return [f"https://{ref.dns}/", f"http://{ref.dns}/"]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +344,18 @@ class Prober:
             res.error = "no-host"
             return res
 
+        urls = candidate_urls(ref)
+        if not urls:
+            # Registry gave us only a bare IP. Not a failure -- unmeasurable,
+            # and counted separately so it never drags the gate down.
+            res.error = "no-usable-address"
+            return res
+
         async with self.sem:
             start = time.perf_counter()
             last_err: Optional[str] = None
 
-            for url in candidate_urls(ref.host):
+            for url in urls:
                 res.url = url
                 if not await self.robots_allows(url):
                     res.robots_blocked = True
@@ -289,6 +383,10 @@ class Prober:
                 res.family, res.dash_version = fingerprint(body)
                 res.callsigns_visible = len(set(CALLSIGN_RE.findall(body.upper())))
                 res.anonymised = bool(ANON_RE.search(body))
+                # Which source got us here matters for parser health later: a
+                # declared URL that stops working is a registry problem, a dns
+                # guess that stops working is ours.
+                res.notes.append("declared-url" if ref.url else "dns-fallback")
 
                 if self.check_json and looks_like_dashboard(body, res.family, res.title):
                     await self.probe_json(str(r.url), res)
@@ -349,16 +447,30 @@ def report(db_path: str = DB_PATH) -> None:
     def scalar(sql: str) -> int:
         return con.execute(sql).fetchone()["c"]
 
+    # Records the registry described only by a bare IP were never contacted.
+    # They are unmeasured, not dead, so they must not dilute the gate.
+    skipped = scalar("SELECT COUNT(*) c FROM probe WHERE error='no-usable-address'")
+    probed = total - skipped
+    if not probed:
+        print(f"\n  {total} records, none probeable -- every one was IP-only.")
+        print("  Use the JSON export: https://hostfiles.refcheck.radio/YSFHosts.json\n")
+        con.close()
+        return
+
     reachable = scalar("SELECT COUNT(*) c FROM probe WHERE status BETWEEN 200 AND 399")
     known = scalar("SELECT COUNT(*) c FROM probe WHERE family IS NOT NULL")
     with_json = scalar("SELECT COUNT(*) c FROM probe WHERE json_endpoint IS NOT NULL")
     anon = scalar("SELECT COUNT(*) c FROM probe WHERE anonymised=1")
     robots = scalar("SELECT COUNT(*) c FROM probe WHERE robots_blocked=1")
+    declared = scalar("SELECT COUNT(*) c FROM probe WHERE notes LIKE '%declared-url%'")
 
     def pct(n: int) -> str:
-        return f"{n:5d}  ({100 * n / total:5.1f}%)"
+        return f"{n:5d}  ({100 * n / probed:5.1f}%)"
 
-    print(f"\n  reflectors probed        {total:5d}")
+    print(f"\n  reflectors in registry   {total:5d}")
+    print(f"  no usable address        {skipped:5d}   (IP only -- not probed, not counted)")
+    print(f"  probed                   {probed:5d}")
+    print(f"    via declared url       {declared:5d}")
     print(f"  http reachable           {pct(reachable)}")
     print(f"  fingerprinted family     {pct(known)}")
     print(f"  machine-readable JSON    {pct(with_json)}")
@@ -379,8 +491,8 @@ def report(db_path: str = DB_PATH) -> None:
     ):
         print(f"    {row['e']:<24} {row['c']:5d}")
 
-    # The decision gate.
-    parseable = known / total
+    # The decision gate, measured against what we actually contacted.
+    parseable = known / probed
     print("\n  " + "-" * 46)
     if parseable >= 0.50:
         verdict = "GO -- scraping is a viable primary source"
@@ -399,25 +511,38 @@ def report(db_path: str = DB_PATH) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
+    ua = (f"ysfprobe/{VERSION} (+amateur radio reflector directory research; "
+          f"operator {args.callsign}; one request per host)")
+
     if args.hosts_file:
         text = open(args.hosts_file, encoding="utf-8", errors="replace").read()
+        source = args.hosts_file
     else:
-        async with httpx.AsyncClient(follow_redirects=True) as c:
+        # RefCheck.Radio blocks generic clients outright and allows one request
+        # per hostfile per hour, so identify ourselves and cache what we get.
+        async with httpx.AsyncClient(
+            follow_redirects=True, headers={"User-Agent": ua}
+        ) as c:
             text = (await c.get(args.hosts_url, timeout=30.0)).text
+        source = args.hosts_url
 
-    reflectors, unparsed = parse_hosts(text)
+    reflectors, unparsed = parse_registry(text, source)
     if unparsed:
-        print(f"warn: {len(unparsed)} host-file lines unparsed "
-              f"(format may have changed under DVRef)", file=sys.stderr)
+        print(f"warn: {len(unparsed)} registry records unparsed "
+              f"(export format may have changed)", file=sys.stderr)
         for line in unparsed[:3]:
             print(f"      {line[:100]}", file=sys.stderr)
 
     if args.limit:
         reflectors = reflectors[: args.limit]
-    print(f"probing {len(reflectors)} reflectors, concurrency {args.concurrency}")
 
-    ua = (f"ysfprobe/{VERSION} (+amateur radio reflector directory research; "
-          f"operator {args.callsign}; one request per host)")
+    with_url = sum(1 for r in reflectors if r.url)
+    with_dns = sum(1 for r in reflectors if not r.url and r.dns)
+    unreachable = len(reflectors) - with_url - with_dns
+    print(f"{len(reflectors)} reflectors: {with_url} declared url, "
+          f"{with_dns} hostname only, {unreachable} IP-only (skipped)")
+    print(f"probing {with_url + with_dns}, concurrency {args.concurrency}")
+
     sem = asyncio.Semaphore(args.concurrency)
     limits = httpx.Limits(max_connections=args.concurrency * 2)
 
@@ -440,8 +565,10 @@ async def run(args: argparse.Namespace) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Phase 0 YSF dashboard fingerprinter")
     p.add_argument("--callsign", help="your callsign, sent in User-Agent (required to probe)")
-    p.add_argument("--hosts-url", default="https://dvref.com/ysf/hosts",
-                   help="host file URL -- VERIFY THIS against DVRef before trusting it")
+    p.add_argument("--hosts-url",
+                   default="https://hostfiles.refcheck.radio/YSFHosts.json",
+                   help="registry export URL. RefCheck.Radio allows one request "
+                        "per hostfile per hour -- prefer --hosts-file")
     p.add_argument("--hosts-file", help="local YSFHosts.txt instead of fetching")
     p.add_argument("--limit", type=int, help="probe only the first N (start at 50)")
     p.add_argument("--concurrency", type=int, default=8)
