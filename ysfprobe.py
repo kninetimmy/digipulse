@@ -219,20 +219,41 @@ class Signature:
 # template-for-template identical (same script/stylesheet bundle, verified
 # structurally), came back unidentified for the same reason.
 #
-# Genuine YCS dashboards, by contrast, carry their own software name as a
-# literal token with nothing to do with that meta tag -- e.g. one links to
-# its own wiki with `href="http://ycs-wiki.xreflector.net"` and closes with
-# a footer crediting the software as "YCS" by name; another (a different,
-# unrelated install) links to a sibling page on the same instance with
-# `href="http://ycs235.xreflector.net/ycs"`. Both installs also happen to
-# use the domain xreflector.net for the software's own home -- coincidental
-# overlap with xlxd's unrelated use of the same word as a keyword, and part
-# of why the old pattern was so easy to write by accident. The token is
-# case-inconsistent across real installs -- upper-case in on-page button
-# text ("YCS235"), lower-case in the URLs above -- so the pattern below adds
-# re.I; the original was case-sensitive and silently missed the lower-case
-# form.  `xreflector` is dropped outright: it never identified YCS, only
-# xlxd's unrelated branding.
+# A second, subtler version of the same mistake also over-matched two
+# further hosts as "ycs": CQ-UK and CQ-WORLD are not YCS dashboards. Both
+# render a "linked reflectors" navbar -- a row of buttons to sibling
+# systems, e.g. (on CQ-UK) a "YCS235" button whose href is
+# `http://ycs235.xreflector.net/ycs`, sitting beside equivalent buttons
+# labelled "DCS020" (`.../dcs` on the same host) and "M17"
+# (`http://m17.ycs235.com`). The page is choosing what to link to, not
+# saying what it is -- classifying it by that button is exactly the
+# `xreflector` mistake in a different shape. Both hosts are actually the
+# same dashboard software as MARRAS and pYSF3 below (identical nav markup,
+# `id="navbarToggleExternalContent"`; identical `blocked.php` menu entry;
+# identical `<meta name="keywords">` prefix) and are reclassified there.
+#
+# A genuine YCS dashboard, by contrast, says so about itself. The one
+# confirmed instance in the sample titles itself plainly --
+#
+#   <title>YCS Dashboard</title>
+#
+# -- and its footer credits the software by name ahead of its authors'
+# calls, each on its own line:
+#
+#   &nbsp;&nbsp;YCS<br/>
+#   &nbsp;&nbsp;DG1HT<br/>
+#   &nbsp;&nbsp;DL5DI<br/>
+#
+# Both are self-description, not an outbound link, which is the actual
+# YCS/xlxd distinction: not "does the token YCS appear", but "does the page
+# assert YCS about itself". The pattern below matches a title beginning
+# "YCS" (mirroring how xlxd is matched below) and, separately, "YCS"
+# appearing as its own bare text node immediately before a <br> -- the
+# credit-list shape above -- so a future genuine install that customises
+# its title but keeps the stock footer (or vice versa) still matches. It
+# does NOT match "YCS235", "ycs235.xreflector.net", or any other token where
+# YCS is glued to a version number or a domain -- exactly the shape of
+# CQ-UK/CQ-WORLD's outbound links.
 #
 # xlxd's own dashboards are identified instead by their title, which is the
 # one thing consistently observed across every XLX-titled host regardless
@@ -241,7 +262,31 @@ class Signature:
 # convention) -- either the bare designator ("XLXnnn") or the designator
 # followed by "Reflector Dashboard". No non-XLX-titled host in the sample
 # begins its title that way, so the pattern is anchored to the <title> tag
-# rather than searched for as a bare substring.
+# rather than searched for as a bare substring. One host runs the same
+# software but has replaced the title with the sysop's own callsign,
+# defeating that anchor -- it's still identifiable by xlxd's stock
+# `<meta name="description">`, present verbatim on every xlxd host in the
+# sample that hasn't been edited away and absent from all others:
+#
+#   <meta name="description" content="XLX is a D-Star Reflector System for Ham Radio Operators.">
+#
+# --------------------------------------------------------------------------
+# Reachable but not signed at all, on purpose:
+#
+# Two titles from the first live sample -- "HUB Monitor" (2 hosts) and
+# "CumbriaCQ Backup Server" (1 host) -- are deliberately left unidentified
+# rather than given a family. Both are genuinely not YSF dashboards: HUB
+# Monitor's entire content is a Joomla page embedding an AllStar (analogue
+# repeater linking, not digital voice) iframe, and CumbriaCQ Backup Server
+# is a 1,497-byte page of four bare links with no reflector data on it at
+# all. Two concrete costs of signing them anyway: looks_like_dashboard()
+# treats any non-None family as "yes", so a family here would draw the
+# whole JSON_CANDIDATES sweep -- up to 8 extra requests -- against a sysop
+# whose page currently costs exactly the one root request the politeness
+# contract promises. And report()'s gate denominator counts family IS NOT
+# NULL, so signing two pages with no YSF payload would inflate the one
+# number Phase 0 exists to produce. Leaving them unidentified is the
+# accurate answer, not a gap -- do not "fix" this by adding signatures back.
 SIGNATURES: list[Signature] = [
     Signature(
         "ysfdash2-shaymez",
@@ -255,38 +300,42 @@ SIGNATURES: list[Signature] = [
     Signature(
         "pysfreflector3",
         [re.compile(r"pYSFReflector", re.I),
-         re.compile(r"\bpYSF3?\b")],
+         re.compile(r"\bpYSF3?\b"),
+         # MARRAS, CQ-UK and CQ-WORLD are this same dashboard software under
+         # a re-skinned navbar -- confirmed structurally (identical
+         # `id="navbarToggleExternalContent"` nav, identical `blocked.php`
+         # menu entry) and by this keywords prefix, which each of the four
+         # carries verbatim (only the trailing site-specific word differs).
+         # A narrower marker exists too -- `grupporadiofirenze`, the shared
+         # author credit -- but it only reaches MARRAS and the original
+         # pYSF3 host; CQ-UK/CQ-WORLD credit a different author entirely.
+         # This wider one is chosen deliberately: it's what gives CQ-UK and
+         # CQ-WORLD a family at all now that they no longer qualify as
+         # "ycs" (see the block comment above), and it was checked against
+         # all 43 sample bodies to confirm it reaches exactly these four and
+         # no others.
+         re.compile(r"c4fm, reflector, ysf protocol, yaesu", re.I)],
     ),
-    # These four are each identified by one literal, software-specific title
-    # string with no observed overlap against any other family in the
-    # sample -- but "ycs" used to over-match on an unrelated meta tag (see
-    # the block comment above) and swallowed one of them (Fusion Dashboard)
-    # before this fix. Kept above "ycs"/"xlxd" on purpose: if either of
-    # those two ever grows a broader pattern again, these narrower,
-    # single-purpose ones must still get first look.
-    Signature(
-        "hub-monitor",
-        [re.compile(r"HUB Monitor", re.I)],
-    ),
+    # Identified by one literal, software-specific title string with no
+    # observed overlap against any other family in the sample -- but "ycs"
+    # used to over-match on an unrelated meta tag (see the block comment
+    # above) and swallowed this one (Fusion Dashboard) before that fix.
+    # Kept above "ycs"/"xlxd" on purpose: if either of those two ever grows
+    # a broader pattern again, this narrower, single-purpose one must still
+    # get first look.
     Signature(
         "fusion-dashboard",
         [re.compile(r"Fusion Dashboard", re.I)],
     ),
     Signature(
-        "cumbriacq-backup",
-        [re.compile(r"CumbriaCQ Backup Server", re.I)],
-    ),
-    Signature(
-        "marras",
-        [re.compile(r"MARRAS C4FM Multi Streams Reflector", re.I)],
-    ),
-    Signature(
         "ycs",
-        [re.compile(r"\bYCS\d*\b", re.I)],
+        [re.compile(r"<title[^>]*>\s*YCS\b", re.I),
+         re.compile(r"(?<![\w.])YCS(?!\w)\s*<br", re.I)],
     ),
     Signature(
         "xlxd",
-        [re.compile(r"<title[^>]*>\s*XLX[0-9A-Z]", re.I)],
+        [re.compile(r"<title[^>]*>\s*XLX[0-9A-Z]", re.I),
+         re.compile(r"XLX is a D-Star Reflector System for Ham Radio Operators", re.I)],
     ),
     Signature(
         "ysfdash-dg9vh",
