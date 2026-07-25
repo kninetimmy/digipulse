@@ -28,13 +28,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gzip
+import hashlib
 import ipaddress
 import json
+import os
 import re
 import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
@@ -45,6 +49,7 @@ except ImportError:
     sys.exit("need httpx: pip install httpx")
 
 DB_PATH = "ysfprobe.db"
+CACHE_DIR = "ysfprobe_cache"
 VERSION = "0.1.0"
 
 # ---------------------------------------------------------------------------
@@ -288,17 +293,105 @@ def candidate_urls(ref: Reflector) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Raw response cache
+# ---------------------------------------------------------------------------
+
+# store() only ever persists DERIVED fields (family, title, callsigns_visible,
+# ...) computed by regexes that, before the first real sweep, have never seen
+# a live dashboard. If SIGNATURES, ANON_RE, or JSON_CANDIDATES turn out to be
+# wrong, finding that out must not mean re-probing the same sysops -- "one
+# root request per host" makes that expensive to redo. So every body this
+# project reads gets written here too, gzipped, the moment it's read: raw
+# HTML in, tuning happens entirely offline afterwards.
+
+_SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# Windows reserves these names (with or without an extension) in every
+# directory. The Pi target doesn't care, but this project is developed on
+# Windows too, and a registry record calling itself "con" or "nul" must not
+# produce an unwritable path.
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _safe_slug(value: str, max_len: int = 48) -> str:
+    """Best-effort human-readable filesystem fragment.
+
+    Never trusted alone for safety or uniqueness -- every caller pairs this
+    with a hash of the raw value (see cache_key()). ref_id and host come from
+    a third-party registry and are untrusted: dropping everything outside a
+    conservative ASCII allowlist removes path separators (both '/' and
+    '\\'), '..', and drive letters (':' is not in the allowlist) in one
+    step, before the reserved-name check runs on what's left.
+    """
+    ascii_value = value.encode("ascii", "ignore").decode("ascii")
+    slug = _SAFE_SLUG_RE.sub("_", ascii_value).strip("._")
+    slug = slug[:max_len] or "x"
+    # Windows treats NAME.anything as reserved too, not just the bare name --
+    # check the part before the first dot, the same way Windows does.
+    if slug.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        slug = f"_{slug}"
+    return slug
+
+
+def cache_key(ref_id: str, host: str) -> str:
+    """Deterministic, filesystem-safe key for one (ref_id, host) pair.
+
+    The hash suffix is what actually guarantees safety and uniqueness: it's
+    a digest of the untrusted raw values, each prefixed by its length so
+    ("a", "bc") and ("ab", "c") can never hash to the same string. The
+    sanitised prefix carries no safety weight -- it only lets a human skim
+    the cache directory without opening every file.
+    """
+    digest = hashlib.sha256(
+        f"{len(ref_id)}:{ref_id}:{host}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{_safe_slug(ref_id)}__{_safe_slug(host)}__{digest}"
+
+
+def cache_response(ref_id: str, host: str, label: str, body: str,
+                    cache_dir: str = CACHE_DIR) -> Path:
+    """Persist one response body gzipped, keyed on (ref_id, host).
+
+    Called the instant a body is read rather than buffered -- unlike
+    store(), which only writes once at the end of a whole sweep, an
+    interrupted run must keep every entry already fetched. `label`
+    distinguishes the root dashboard body ("root") from each JSON_CANDIDATES
+    path tried against the same host, so one reflector's whole footprint
+    lands in a single directory. Writes via a temp file + atomic rename so a
+    hard kill mid-write can never leave a truncated .gz that looks like a
+    complete entry.
+    """
+    out_dir = Path(cache_dir) / cache_key(ref_id, host)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"{_safe_slug(label, max_len=64)}.gz"
+    data = gzip.compress(body.encode("utf-8", "replace"))
+    tmp = target.with_name(target.name + f".tmp{os.getpid()}")
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+    return target
+
+
+def read_cached_response(path) -> str:
+    """Inverse of cache_response(): decompress and decode a cached body."""
+    return gzip.decompress(Path(path).read_bytes()).decode("utf-8", "replace")
+
+
+# ---------------------------------------------------------------------------
 # Probing
 # ---------------------------------------------------------------------------
 
 
 class Prober:
     def __init__(self, client: httpx.AsyncClient, sem: asyncio.Semaphore,
-                 check_json: bool, respect_robots: bool):
+                 check_json: bool, respect_robots: bool, cache_dir: str = CACHE_DIR):
         self.client = client
         self.sem = sem
         self.check_json = check_json
         self.respect_robots = respect_robots
+        self.cache_dir = cache_dir
 
     async def robots_allows(self, base: str) -> bool:
         if not self.respect_robots:
@@ -320,10 +413,14 @@ class Prober:
                 r = await self.client.get(url, timeout=8.0)
             except Exception:
                 continue
+            # Cache whatever came back regardless of status -- a 404 on a
+            # hypothesised endpoint is itself useful offline evidence that
+            # the path doesn't exist for this dashboard family.
+            body = r.text[:200_000]
+            cache_response(res.ref_id, res.host, f"json-{path}", body, self.cache_dir)
             if r.status_code != 200:
                 continue
             ctype = r.headers.get("content-type", "")
-            body = r.text[:200_000]
             if "json" in ctype.lower():
                 res.json_endpoint = url
                 return
@@ -378,6 +475,7 @@ class Prober:
                     continue
 
                 body = r.text[:400_000]
+                cache_response(res.ref_id, res.host, "root", body, self.cache_dir)
                 m = TITLE_RE.search(body)
                 res.title = (m.group(1).strip()[:200] if m else None)
                 res.family, res.dash_version = fingerprint(body)
@@ -550,7 +648,9 @@ async def run(args: argparse.Namespace) -> None:
         headers={"User-Agent": ua}, follow_redirects=True,
         limits=limits, verify=False,
     ) as client:
-        prober = Prober(client, sem, not args.no_json_probe, not args.ignore_robots)
+        prober = Prober(
+            client, sem, not args.no_json_probe, not args.ignore_robots, args.cache_dir,
+        )
         results: list[ProbeResult] = []
         tasks = [prober.probe(r) for r in reflectors]
         for i, coro in enumerate(asyncio.as_completed(tasks), 1):
@@ -573,6 +673,9 @@ def main() -> None:
     p.add_argument("--limit", type=int, help="probe only the first N (start at 50)")
     p.add_argument("--concurrency", type=int, default=8)
     p.add_argument("--db", default=DB_PATH)
+    p.add_argument("--cache-dir", default=CACHE_DIR,
+                   help="gzipped raw response bodies, keyed on (ref_id, host), "
+                        "for offline fingerprinter tuning")
     p.add_argument("--no-json-probe", action="store_true")
     p.add_argument("--ignore-robots", action="store_true")
     p.add_argument("--report", action="store_true", help="print report from existing db")
