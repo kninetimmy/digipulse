@@ -23,8 +23,18 @@ pip install httpx                     # only dependency; installed (0.28.1)
 
 # Probe (--callsign is mandatory and refuses to run without it, by design)
 python ysfprobe.py --callsign <YOURCALL> --hosts-file YSFHosts.txt --limit 50
-python ysfprobe.py --callsign <YOURCALL> --hosts-url <verified-dvref-url>
 python ysfprobe.py --report           # re-print the gate from the existing ysfprobe.db
+```
+
+The host file comes from **RefCheck.Radio**, and its publisher terms are binding:
+**one request per hostfile per hour**, and a unique identifying User-Agent (curl
+and wget defaults are blocked). Download once to `YSFHosts.txt` and work from
+`--hosts-file`; `--hosts-url` is the exception, not the normal path. The file is
+gitignored because redistribution with altered attribution is prohibited.
+
+```
+https://hostfiles.refcheck.radio/YSFHosts.txt    # tab-delimited
+https://hostfiles.refcheck.radio/YSFHosts.json   # better parse target
 ```
 
 Always `--limit 50` first, inspect the unidentified titles, add signatures, then
@@ -60,14 +70,20 @@ Things that will bite you if changed carelessly:
   prints a warning. That warning is the early-detection system for a registry format
   change; do not silence it.
 
-## Unverified assumptions in the spike
+## Known-wrong and unverified in the spike
 
-Flagged because a silent wrong guess poisons everything downstream:
+**Known wrong — fix before the probe can run at all:**
 
-- The `--hosts-url` default (`https://dvref.com/ysf/hosts`) is **a guess.** The
-  registry moved from DG9VH to DVRef on 2025-06-01; confirm the real export URL and
-  whether the field layout is still `ID;Name;Description;Address;Port;Comment` by
-  hand before trusting any output.
+- The `--hosts-url` default still points at `https://dvref.com/ysf/hosts`, which is
+  not the registry. See the RefCheck.Radio URLs above.
+- `parse_hosts()` splits on `;`, but the export is **tab-delimited**. As written it
+  rejects every line into `unparsed`. That the failure is loud rather than silent is
+  the parser design working; fix the delimiter, and prefer the JSON export.
+
+**Still unverified — a silent wrong guess here poisons everything downstream:**
+
+- The host file's actual column layout. Confirm against a downloaded file; do not
+  assume the historic `ID;Name;Description;Address;Port;Comment` survived.
 - `JSON_CANDIDATES` paths are hypotheses, not observed endpoints.
 - `ANON_RE` is untuned; no real dashboard HTML has ever passed through the
   fingerprinter.
@@ -83,6 +99,9 @@ Flagged because a silent wrong guess poisons everything downstream:
   endpoint carved out. No query load.
 - **Split deployment:** Pi 5 runs the node daemon near the radios and pushes; a VPS
   or Cloudflare Pages serves the index. The home Pi is never publicly exposed.
+  Windows support for the daemon is a stretch goal — don't build toward it, but
+  avoid gratuitously Linux-only choices (hardcoded POSIX paths, systemd-only
+  service assumptions, fork-based concurrency) that are expensive to retrofit.
 - **Parser health is a first-class metric from day one.** Scrapers fail silently —
   a busy reflector indexed as dead is the characteristic failure of this project.
   Track per-family extraction success rate and alert on drops.

@@ -1,9 +1,9 @@
 # YSF Activity Index — Project State
 
-**Working name:** `ysfindex` (not final — rename before first push if something better lands)
+**Name:** `digipulse` (settled 2026-07-25; earlier working name was `ysfindex`)
 **Status:** Phase 0 spike written, not yet run against the live network
+**Repo:** <https://github.com/kninetimmy/digipulse> — public, Apache-2.0
 **Last updated:** 2026-07-25
-**Origin:** Brainstormed in Claude chat; handing off to Claude Code CLI for implementation
 
 > Note: single-doc handoff, written to be read cold by a fresh session.
 > Sections are self-contained if it later needs splitting or indexing.
@@ -48,18 +48,44 @@ Pi-Star/WPSD owners, and anyone else can consume it regardless of client.
 | **Protocol reference** | `g4klx/YSFClients` (GPL) — canonical YSF gateway/reflector. `JimZAH/ysf-reflector-monitor` — minimal "connect as client, print activity", good starting read. |
 | **RF-side decode** | `hb9uf/gr-ysf` (GNU Radio, parses FICH, surfaces callsigns), `lwvmobile/dsd-fme` (C, YSF sync/FICH/DCH). Both usable as reference if the RF branch is ever revived. |
 
-### ⚠ Registry migration — important
+### ⚠ Registry migration — resolved 2026-07-25
 
 The reflector registry **changed hands in 2025**. DG9VH handed YSFHosts.txt
-maintenance to **DVRef** effective 2025-06-01. Pi-Star, WPSD, and G4KLX's
-YSFClients now pull from **dvref.com**. The old
-`register.ysfreflector.de/export_csv.php` may still respond but is no longer
-canonical and may be stale.
+maintenance onward effective 2025-06-01, and the old
+`register.ysfreflector.de/export_csv.php` is no longer canonical.
 
-**Unverified:** DVRef's exact export URL and whether the field layout still
-matches the historic `ID;Name;Description;Address;Port;Comment`. Confirm this
-before trusting any output. The spike's parser is defensive and reports
-unparsed lines, but a silent format change would poison everything downstream.
+The live registry is **RefCheck.Radio**, at <https://hostfiles.refcheck.radio>.
+The landing page gates the links behind a terms checkbox; the files themselves
+are at stable paths:
+
+| Format | URL |
+|---|---|
+| Plain text | `https://hostfiles.refcheck.radio/YSFHosts.txt` |
+| JSON | `https://hostfiles.refcheck.radio/YSFHosts.json` |
+
+P25, NXDN and M17 host files follow the same pattern, which matters for the
+deferred second-adapter work.
+
+**The format changed, and it breaks the spike.** The text export is
+**tab-delimited**, not semicolon-delimited. `parse_hosts()` splits on `;`, so
+every line will land in `unparsed` — loud, not silent, which is the parser
+design working as intended. There is now also a **JSON export**, which is the
+better parse target and removes a whole class of delimiter guesswork. The exact
+column layout is still unconfirmed by inspection: download once, eyeball it,
+then fix the parser.
+
+**Publisher terms — binding constraints, not suggestions:**
+
+- **One request per hostfile per hour.** Cache to disk; never fetch per probe
+  run. `--hosts-file` becomes the normal path, `--hosts-url` the exception.
+- **A unique identifying User-Agent is required**; generic curl/wget defaults
+  are blocked. The spike's callsign-bearing UA already satisfies this, and this
+  is independent confirmation that §9's politeness stance is table stakes.
+- Files are regenerated roughly every 30 minutes, so hourly is plenty fresh.
+- Headers must remain unaltered and redistribution with modified attribution is
+  prohibited — **do not commit the host file to the repo** (it is gitignored).
+- **Commercial use is prohibited without explicit permission.** Fine for a free
+  public index; revisit if that ever changes.
 
 ## 4. Current state — Phase 0 spike
 
@@ -75,8 +101,13 @@ dashboard we can parse, and what software is it running?*
 - Hostname → both schemes, bare IP → http only
 - Report generation and the GO/PARTIAL/NO-GO verdict gate
 
-**NOT verified (no network access in the authoring sandbox):**
-- The `--hosts-url` default is a **guess**
+**Known wrong (corrected 2026-07-25, fix not yet written):**
+- The `--hosts-url` default points at `dvref.com`, which is not the registry.
+  It is `https://hostfiles.refcheck.radio/YSFHosts.txt`.
+- `parse_hosts()` splits on `;`. The export is **tab-delimited**. As written the
+  parser rejects every line.
+
+**Still unverified:**
 - `JSON_CANDIDATES` paths are **hypotheses**, not observed endpoints
 - Anonymisation regex is untuned against real dashboards
 - No real HTML has ever passed through the fingerprinter
@@ -84,8 +115,9 @@ dashboard we can parse, and what software is it running?*
 **Run order:**
 ```bash
 pip install httpx
-# 1. confirm the real DVRef export URL, download by hand, eyeball the format
-# 2. small sample first
+# 1. download the host file ONCE (one request per hour is the publisher's limit)
+#    and eyeball the column layout before trusting it
+# 2. fix parse_hosts() for the real delimiter, then small sample first
 python ysfprobe.py --callsign <YOURCALL> --hosts-file YSFHosts.txt --limit 50
 # 3. inspect unidentified titles, add signatures, re-run
 # 4. full sweep, then
@@ -148,6 +180,13 @@ one small live endpoint. No query load, trivially cacheable, cheap forever.
 **Split deployment.** Pi 5 runs the node daemon (needs to be near the radios).
 A cheap VPS or Cloudflare Pages serves the index. Push, don't pull. Do not
 expose the home Pi as a public service.
+
+*Windows support for the node daemon is a stretch goal* — not required now, and
+explicitly not worth delaying Phase 1 for. It is cheap if kept in mind and
+expensive to retrofit, so avoid gratuitously Linux-only choices: no hardcoded
+POSIX paths, no systemd-only service assumptions, nothing fork-based. Rust's
+std and `tokio` are cross-platform by default, so mostly this is a discipline
+about paths and process management rather than real work.
 
 **Parser health as a first-class metric.** Scrapers fail *silently* — a
 dashboard updates, the extractor returns zero rows, and a busy reflector gets
@@ -217,8 +256,14 @@ moment the project requires cooperation to function, it stops functioning.
 
 ## 11. Next actions
 
-1. Confirm DVRef's actual host-file export URL and field layout by hand
-2. `--limit 50` sample run; inspect unidentified titles; add signatures
-3. Full sweep, call the gate
-4. Design the normalised record schema (blocks all of Phase 1)
-5. Pick a name and a license; initial commit
+1. ~~Confirm the registry's host-file export URL and field layout~~ — **done
+   2026-07-25**, see §3. It is RefCheck.Radio, the text export is tab-delimited,
+   and a JSON export exists.
+2. ~~Pick a name and a license; initial commit~~ — **done**: `digipulse`,
+   Apache-2.0, <https://github.com/kninetimmy/digipulse>.
+3. **Fix `parse_hosts()` for the real format.** Prefer the JSON export and keep a
+   text parser as fallback. Download the host file once, confirm the columns
+   against a real file, and only then trust the output.
+4. `--limit 50` sample run; inspect unidentified titles; add signatures
+5. Full sweep, call the gate
+6. Design the normalised record schema (blocks all of Phase 1)
