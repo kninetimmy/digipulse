@@ -25,13 +25,13 @@ jobs:
         with:
           python-version: "3.8"
 
-      # requirements-dev.txt declares only pytest -- ysfprobe.py hard-exits
-      # at import time if httpx is missing, so it must be installed here
-      # explicitly rather than assumed present.
+      # requirements.txt pins the runtime dependency (httpx); requirements-dev.txt
+      # covers the dev-only dependencies (pytest). ysfprobe.py hard-exits at
+      # import time if httpx is missing, so both files are installed here.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt httpx
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run test suite
         run: pytest

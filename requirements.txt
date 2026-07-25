@@ -1,0 +1,4 @@
+# Runtime dependency for ysfprobe.py. Pinned to the version this project
+# has actually been developed and probed against; see the module docstring
+# in ysfprobe.py for why httpx is the only runtime dependency.
+httpx==0.28.1

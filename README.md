@@ -30,7 +30,7 @@ for the full design, the phase gates, and the reasoning behind each decision.
 ## Usage
 
 ```bash
-pip install httpx
+pip install -r requirements.txt
 
 # --callsign is mandatory; the probe refuses to run without identifying you
 python ysfprobe.py --callsign <YOURCALL> --hosts-file YSFHosts.txt --limit 50
@@ -40,7 +40,7 @@ python ysfprobe.py --report
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
