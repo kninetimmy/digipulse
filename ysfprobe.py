@@ -717,7 +717,9 @@ def main() -> None:
     p.add_argument("--db", default=DB_PATH)
     p.add_argument("--cache-dir", default=CACHE_DIR,
                    help="gzipped raw response bodies, keyed on (ref_id, host), "
-                        "for offline fingerprinter tuning")
+                        "for offline fingerprinter tuning. Holds third-party "
+                        "dashboard HTML that must not be redistributed -- the "
+                        "default path is gitignored, a custom one here is not")
     p.add_argument("--no-json-probe", action="store_true")
     p.add_argument("--ignore-robots", action="store_true")
     p.add_argument("--report", action="store_true", help="print report from existing db")
