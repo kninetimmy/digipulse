@@ -279,12 +279,15 @@ class Signature:
 # Monitor's entire content is a Joomla page embedding an AllStar (analogue
 # repeater linking, not digital voice) iframe, and CumbriaCQ Backup Server
 # is a 1,497-byte page of four bare links with no reflector data on it at
-# all. Two concrete costs of signing them anyway: looks_like_dashboard()
-# treats any non-None family as "yes", so a family here would draw the
-# whole JSON_CANDIDATES sweep -- up to 8 extra requests -- against a sysop
-# whose page currently costs exactly the one root request the politeness
-# contract promises. And report()'s gate denominator counts family IS NOT
-# NULL, so signing two pages with no YSF payload would inflate the one
+# all. Two concrete costs of signing them anyway. First, requests: a family
+# here would put these hosts into FAMILY_CANDIDATES' keyspace, one entry
+# away from costing a sysop requests their page currently never costs.
+# (This used to be the sharper of the two -- any non-None family drew the
+# whole 8-path JSON_CANDIDATES sweep, because looks_like_dashboard() treats
+# any non-None family as "yes". Per-family targeting has defused that and an
+# unmapped family now costs nothing, but the reasoning still points the same
+# way.) Second, and unchanged: report()'s gate denominator counts family IS
+# NOT NULL, so signing two pages with no YSF payload would inflate the one
 # number Phase 0 exists to produce. Leaving them unidentified is the
 # accurate answer, not a gap -- do not "fix" this by adding signatures back.
 SIGNATURES: list[Signature] = [
@@ -349,11 +352,149 @@ SIGNATURES: list[Signature] = [
     ),
 ]
 
-# Endpoints worth a second look ONLY if the root already looked like a dashboard.
-JSON_CANDIDATES = [
-    "api.php", "json.php", "data.php", "status.json",
-    "lh.php", "ajax.php", "api/status", "api/lastheard",
-]
+# ---------------------------------------------------------------------------
+# Candidate endpoints, per family
+# ---------------------------------------------------------------------------
+
+# The first live sample fired the same eight hypothesised paths -- api.php,
+# json.php, data.php, ajax.php, status.json, lh.php, api/status,
+# api/lastheard -- at every host that passed looks_like_dashboard(). That is
+# 336 requests across 42 hosts, of which 335 missed. In a sysop's access log
+# it reads as one root fetch followed by eight consecutive probes for paths
+# their dashboard does not have: the shape of a vulnerability scan, whatever
+# the pacing between them. Extrapolated over the 1,283 probeable reflectors
+# it is roughly 10,000 requests at ~99.7% misses, and PROJECT.md section 9
+# is explicit that this project can be killed socially long before it is
+# killed technically.
+#
+# So the shotgun is gone. A host is now only asked for a path that hosts of
+# its OWN fingerprinted family were observed to serve. Everything below is
+# grounded in the 43 cached response bodies from that sample
+# (ysfprobe_cache/ -- gitignored, so absent from a fresh checkout); no path
+# is carried forward from the old list merely because it looked plausible.
+#
+# What the sweep actually observed, per family:
+#
+#   family             hosts  requests  responses
+#   xlxd                  20       160  404 x 160
+#   ysfdash-dg9vh          5        40  404 x 39, 200 x 1 (lh.php, ref 00069)
+#   fusion-dashboard       4        32  404 x 32
+#   pysfreflector3         4        32  404 x 32
+#   ycs                    2        16  404 x 16
+#   mmdvm-generic          2        16  404 x 16
+#   wsysfdash              2        16  404 x 16
+#   (unidentified)         4        24  404 x 8, 500 x 16, 1 host never swept
+#   ysfdash2-shaymez       0         0  signature matched no host in the sample
+#
+# Be precise about what that is evidence OF. 335 misses are strong evidence
+# that THOSE EIGHT PATHS do not exist on THOSE HOSTS. They are not evidence
+# that a family has no machine-readable endpoint at all: no other path was
+# ever requested, so for every family with an empty list below the honest
+# claim is "no endpoint observed", not "no endpoint exists".
+#
+# --- the one hit, and the only entry in the map ---------------------------
+#
+# lh.php on ysf.cq-nw.uk (ref 00069, family ysfdash-dg9vh) returned 200 with
+# 512 bytes of purpose-built last-heard markup: a card headed "Last Heard
+# List" wrapping <table id="lh"> with the columns Time / Callsign / Target /
+# Gateway / Dur (s). Those five fields without the surrounding dashboard
+# chrome are a better Phase 1 extraction target than the full page.
+#
+# Three caveats, each a reason the next sweep may read differently:
+#
+#  1. The response is an HTML FRAGMENT, not JSON. probe_json() only sets
+#     ProbeResult.json_endpoint when the body really is JSON, so a 200 here
+#     records nothing in the database -- the evidence lives in the cache
+#     label (json-lh.php-200) and nowhere else.
+#  2. Its <tbody> was EMPTY, so whether rows are ever server-rendered at
+#     this path is still unknown. There is reason to doubt it: the
+#     fragment's Time column header is the literal, unsubstituted token
+#     "Time (TIMEZONE)", whereas the same block rendered inline in the root
+#     page of the sibling hosts has a real zone substituted in -- "Time
+#     (UTC)", "Time (Europe/Rome)", "Time (America/Boise)", and on the
+#     Portuguese-localised one "Hora (America/Sao_Paulo)". 00069's own root
+#     page stamps "Last Reload 2026-07-25, 19:28:30 (Europe/London)", so
+#     that host does have a zone configured. A direct fetch of lh.php
+#     therefore looks like an unrendered template rather than the populated
+#     view, which would explain the empty tbody too. Not proven: an idle
+#     reflector also explains an empty tbody -- it just does not explain the
+#     placeholder.
+#  3. It hit on 1 of the family's 5 hosts. The other four 404'd, and on
+#     those four the same last-heard block sits inline in the root page
+#     instead -- same <table id="lh">, same five columns, headed "Last Heard
+#     List" on the three English ones. (The served fragment carries
+#     class="display" where the inline copies carry
+#     class="table table-condensed", so it is not the same file revision.)
+#     00069 is a heavily customised install -- its root is stripped down to
+#     a "Currently TXing" table plus an APRS map and pulls the rest through
+#     <iframe src="aux.php"> -- and its markup never references lh.php. So
+#     this may be one sysop's split-out include rather than a file the
+#     family ships. It is registered anyway because it is the only non-error
+#     response in 336 requests and costs exactly one request on ~12% of
+#     hosts; the next sweep's cache settles it either way.
+#
+# --- leads deliberately NOT registered ------------------------------------
+#
+# Several families reference same-origin paths in their own markup:
+# ysfdash-dg9vh points at txinfo.php on all 5 hosts, pysfreflector3 at
+# ./main.php, ./linked.php and ./blocked.php on all 4, ycs at _status.html,
+# _monitor.html, _matrix.html, roomlist.html and five more on both, xlxd at
+# ./index.php?show=... query-string views on all 20 (the traffic view on 9
+# of them). Those references are real and observed -- but no RESPONSE from
+# any of them has ever been observed, because nothing has ever requested
+# one. Registering them would spend real requests on real sysops to test a
+# hypothesis, which is the exact habit this map exists to break; and most of
+# them are ordinary dashboard pages the Phase 1 scraper would read anyway
+# rather than data endpoints. They are a decision of their own, with
+# txinfo.php the strongest candidate of the set.
+#
+# --- a fork does not inherit its ancestor's endpoints ---------------------
+#
+# A family absent from this map gets nothing (see candidate_endpoints()),
+# and that includes forks. The sample already shows why: 51.83.134.240
+# still titles itself "YSFReflector-Dashboard by DG9VH" yet matches the
+# WSYSFDash signature, and lh.php 404'd on it and on the other wsysfdash
+# host. Being derived from the dg9vh dashboard is not evidence of serving
+# the dg9vh dashboard's files.
+FAMILY_CANDIDATES: dict[str, list[str]] = {
+    # The single observed hit in the whole sample; caveats above.
+    "ysfdash-dg9vh": ["lh.php"],
+    # 160 requests over 20 hosts, every one a 404.
+    "xlxd": [],
+    # 32 requests over 4 hosts, every one a 404.
+    "fusion-dashboard": [],
+    # 32 requests over 4 hosts, every one a 404.
+    "pysfreflector3": [],
+    # 16 requests over 2 hosts, every one a 404.
+    "ycs": [],
+    # 16 requests over 2 hosts, every one a 404.
+    "mmdvm-generic": [],
+    # 16 requests over 2 hosts, every one a 404 -- lh.php included, on a
+    # host that advertises itself as a DG9VH dashboard.
+    "wsysfdash": [],
+    # Zero hosts in the sample, so no evidence either way, so nothing.
+    # Listed explicitly to show it was considered rather than overlooked --
+    # and it does NOT inherit ysfdash-dg9vh's lh.php just because it sits
+    # above it in SIGNATURES as its fork.
+    "ysfdash2-shaymez": [],
+}
+
+
+def candidate_endpoints(family: Optional[str]) -> list[str]:
+    """Paths worth requesting on a host fingerprinted as `family`.
+
+    An empty list means the host is asked for nothing beyond the single
+    root request the politeness contract promises. That is the normal
+    answer, not a gap. Two other cases land there deliberately: a host with
+    no family at all (fingerprint() matched nothing), and a family this map
+    does not mention (a signature added since the last sweep, about which
+    nothing has been observed yet). The default is silence until a sweep
+    says otherwise.
+    """
+    if not family:
+        return []
+    return list(FAMILY_CANDIDATES.get(family, ()))
+
 
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 # Loose callsign shape: 1-2 alnum, digit, 1-4 letters. Deliberately permissive.
@@ -482,8 +623,8 @@ def candidate_urls(ref: Reflector) -> list[str]:
 
 # store() only ever persists DERIVED fields (family, title, callsigns_visible,
 # ...) computed by regexes that, before the first real sweep, have never seen
-# a live dashboard. If SIGNATURES, ANON_RE, or JSON_CANDIDATES turn out to be
-# wrong, finding that out must not mean re-probing the same sysops -- "one
+# a live dashboard. If SIGNATURES, ANON_RE, or FAMILY_CANDIDATES turn out to
+# be wrong, finding that out must not mean re-probing the same sysops -- "one
 # root request per host" makes that expensive to redo. So every body this
 # project reads gets written here too, gzipped, the moment it's read: raw
 # HTML in, tuning happens entirely offline afterwards.
@@ -509,10 +650,30 @@ def _safe_slug(value: str, max_len: int = 48) -> str:
     conservative ASCII allowlist removes path separators (both '/' and
     '\\'), '..', and drive letters (':' is not in the allowlist) in one
     step, before the reserved-name check runs on what's left.
+
+    An over-long value is elided in the MIDDLE, never cut off at the tail.
+    The tail is where the load-bearing part of a cache label lives:
+    cache_response() is handed "json-<path>-<status>", so tail truncation
+    ate the "-404" that tells a miss from a hit -- and worse, the 404 and
+    the 200 for the same path then produced the SAME filename, the later
+    write silently overwriting the earlier. With cache_response()'s 64
+    character budget a candidate path of 56 characters is already enough to
+    trigger it. Keeping both ends makes the status suffix unloseable.
+
+    The elision is still lossy in the middle. For directory names that costs
+    nothing -- cache_key() pairs this with a hash that carries the
+    uniqueness. For labels there is no hash, so what this guarantees is
+    narrower and deliberate: two entries differing in their suffix (the
+    status) always stay distinct; two entries differing only somewhere in a
+    50-plus-character middle would not.
     """
     ascii_value = value.encode("ascii", "ignore").decode("ascii")
     slug = _SAFE_SLUG_RE.sub("_", ascii_value).strip("._")
-    slug = slug[:max_len] or "x"
+    if len(slug) > max_len:
+        head = (max_len - 1) // 2
+        tail = max_len - 1 - head
+        slug = f"{slug[:head]}_{slug[-tail:]}"
+    slug = slug or "x"
     # Windows treats NAME.anything as reserved too, not just the bare name --
     # check the part before the first dot, the same way Windows does.
     if slug.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
@@ -542,11 +703,13 @@ def cache_response(ref_id: str, host: str, label: str, body: str,
     Called the instant a body is read rather than buffered -- unlike
     store(), which only writes once at the end of a whole sweep, an
     interrupted run must keep every entry already fetched. `label`
-    distinguishes the root dashboard body ("root") from each JSON_CANDIDATES
-    path tried against the same host, so one reflector's whole footprint
-    lands in a single directory. Writes via a temp file + atomic rename so a
-    hard kill mid-write can never leave a truncated .gz that looks like a
-    complete entry.
+    distinguishes the root dashboard body ("root") from each per-family
+    candidate path tried against the same host (see FAMILY_CANDIDATES), so
+    one reflector's whole footprint lands in a single directory. Candidate
+    labels are "json-<path>-<status>", and _safe_slug()'s middle elision is
+    what keeps that status suffix from being truncated away. Writes via a
+    temp file + atomic rename so a hard kill mid-write can never leave a
+    truncated .gz that looks like a complete entry.
 
     The pid-only temp-file suffix is only collision-free because this
     function is a plain, non-async def: nothing here ever awaits, so two
@@ -623,19 +786,35 @@ class Prober:
             return True  # absent or unreadable robots.txt is not a prohibition
 
     async def probe_json(self, base: str, res: ProbeResult) -> None:
-        for path in JSON_CANDIDATES:
+        paths = candidate_endpoints(res.family)
+        if not paths:
+            # Nothing has ever been observed to answer on this family (or
+            # the host has no family at all), so it is asked for nothing.
+            # Its access log shows the one root fetch and stops there.
+            return
+        for i, path in enumerate(paths):
+            if i:
+                # Pace consecutive requests to the SAME host. This sleep
+                # used to sit at the end of the loop body, where every
+                # `continue` skipped it -- so on the miss path, which is the
+                # only path the sweep ever took, the requests actually went
+                # out back-to-back. Sleeping before each subsequent request
+                # makes the gap unconditional.
+                await asyncio.sleep(0.3)  # do not machine-gun a single host
             url = urljoin(base, path)
             try:
                 r = await self.client.get(url, timeout=8.0)
             except Exception:
                 continue
             # Cache whatever came back regardless of status -- a 404 on a
-            # hypothesised endpoint is itself useful offline evidence that
-            # the path doesn't exist for this dashboard family. The status
-            # is folded into the label (not just the body) so that fact
-            # survives a glob of the cache directory: two cached bodies that
-            # are both e.g. {"error":"not found"} must stay distinguishable
-            # from a genuine 200 without decompressing anything.
+            # registered endpoint is itself useful offline evidence that the
+            # path doesn't exist for this dashboard family after all. The
+            # status is folded into the label (not just the body) so that
+            # fact survives a glob of the cache directory: two cached bodies
+            # that are both e.g. {"error":"not found"} must stay
+            # distinguishable from a genuine 200 without decompressing
+            # anything. _safe_slug() elides the middle rather than the tail
+            # precisely so this suffix cannot be truncated away.
             body = r.text[:200_000]
             cache_response(res.ref_id, res.host, f"json-{path}-{r.status_code}",
                             body, self.cache_dir)
@@ -654,7 +833,6 @@ class Prober:
                     return
                 except Exception:
                     pass
-            await asyncio.sleep(0.3)  # do not machine-gun a single host
 
     async def probe(self, ref: Reflector) -> ProbeResult:
         res = ProbeResult(ref_id=ref.ref_id, name=ref.name, host=ref.host)
@@ -707,6 +885,14 @@ class Prober:
                 # guess that stops working is ours.
                 res.notes.append("declared-url" if ref.url else "dns-fallback")
 
+                # Two gates, both kept on purpose. Since candidate_endpoints()
+                # answers [] for a host with no family, and every host WITH a
+                # family already satisfies looks_like_dashboard(), this outer
+                # gate can no longer change the outcome on its own -- it is
+                # belt and braces. It stays because it is the documented
+                # politeness contract, and because it keeps holding if the
+                # inner map ever grows an entry reached by something other
+                # than fingerprint().
                 if self.check_json and looks_like_dashboard(body, res.family, res.title):
                     await self.probe_json(str(r.url), res)
                 return res
