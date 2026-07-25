@@ -1,0 +1,15 @@
+.memhub/
+agent_docs/PROJECT.md
+agent_docs/PROJECT_LEDGER.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Probe output — local scan data, regenerated on every run
+ysfprobe.db
+
+# Registry data fetched at runtime; belongs to DVRef, not this repo
+YSFHosts.txt
