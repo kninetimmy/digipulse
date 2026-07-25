@@ -251,22 +251,41 @@ _ANON_PREFIX = r"\b[A-Z]{1,2}[0-9][A-Z0-9]{0,4}"
 # had MORE visible callsigns than the unflagged one -- the flag was
 # measuring the opposite of what it claimed to.
 #
-# Checked against the 43 real dashboard bodies in ysfprobe_cache/, genuine
-# redaction takes one of these shapes:
+# Checked cell-by-cell against the 43 real dashboard bodies in
+# ysfprobe_cache/ (only 2 of the 43 hosts show any genuine redaction, but
+# between them there are 126 individually redacted "lastheard" cells),
+# genuine redaction takes one of these shapes:
 #   - a callsign-shaped prefix immediately followed by 2+ asterisks, e.g.
-#     "W7C***" -- by far the most common real rendering: the dashboard
-#     shows the first few characters and masks the rest;
-#   - a run of 4+ asterisks standing alone, with nothing callsign-shaped
-#     in front of it, that isn't itself the delimiter of a "/**"-style
-#     comment -- the whole callsign masked rather than just a suffix;
+#     "W7C***" -- the dashboard shows the first few characters and masks
+#     the rest;
+#   - a bare run of 3+ asterisks with nothing callsign-shaped in front of
+#     it, that isn't itself the delimiter of a CSS/JS comment -- either
+#     the whole callsign masked rather than just a suffix, or (the
+#     majority shape on one of the two redacting hosts) a callsign whose
+#     leading zero is rendered as the HTML entity &Oslash; (the ham
+#     zero-slash convention) rather than a literal digit: probe() reads
+#     r.text, so that entity never decodes, and a prefix regex anchored on
+#     [0-9] can never see the digit. This branch does not require a
+#     callsign-shaped prefix at all, specifically so it still catches
+#     that case -- e.g. "N&Oslash;U***" is caught here, not above, because
+#     there is no ASCII digit for the prefix branch to anchor on. (An
+#     earlier version of this pattern required 4+ bare asterisks, which
+#     missed 18 of these 126 cells -- 11 of them on the one host where
+#     zero-slash calls are the majority shape.)
 #   - a run of 3+ literal X's followed by a digit, e.g. "XXXXX1" -- the
 #     same idea rendered with X instead of an asterisk;
 #   - the literal placeholder word ANON.
-# Neither of the first two branches matches on a bare "**": that's exactly
-# what opens a "/**" comment, and requiring either a callsign-shaped
-# prefix or a 4+ run keeps it out without special-casing comment syntax.
+# The bare-run branch excludes matches immediately preceded OR followed by
+# '/' or '*': that's what keeps out both the "/**" that opens a CSS/JSDoc
+# comment and the "**/" (or a decorative "/*** ... ***/" banner) that
+# closes one, without having to special-case comment syntax. The
+# prefix+asterisks branch additionally excludes a match immediately
+# followed by a digit -- otherwise "**" is also the JS/Python
+# exponentiation operator, and a variable name shaped like a callsign
+# (e.g. "x2**3") would false-positive; zero occurrences of that in the
+# 43-host sample, but it's a live risk over the full ~1,700-host registry.
 ANON_RE = re.compile(
-    rf"({_ANON_PREFIX}\*{{2,}}|(?<!/)\*{{4,}}|X{{3,}}\d|\bANON\b)",
+    rf"({_ANON_PREFIX}\*{{2,}}(?!\d)|(?<![/*])\*{{3,}}(?![/*])|X{{3,}}\d|\bANON\b)",
     re.I,
 )
 
